@@ -1,5 +1,3 @@
-# coding=utf-8
-
 # Copyright (c) 2021 Josh Levy-Kramer <josh@levykramer.co.uk>.
 # This file is based on code by the authors denoted below and has been modified from its original version.
 #
@@ -148,8 +146,9 @@ def init_wandb(neox_args):
     if neox_args.use_wandb == False:
         return
 
-    use_wandb = is_local_main() and (get_wandb_api_key(neox_args=neox_args) is not None)
-    neox_args.update_value("use_wandb", use_wandb)
+    if not neox_args.wandb_init_all_ranks:
+        use_wandb = is_local_main() and (get_wandb_api_key(neox_args=neox_args) is not None)
+        neox_args.update_value("use_wandb", use_wandb)
     if neox_args.use_wandb:
         group_name = neox_args.wandb_group
         name = f"{socket.gethostname()}-{local_rank()}" if group_name else None
