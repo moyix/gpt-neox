@@ -962,3 +962,8 @@ class NeoXArgsTextgen(NeoXArgsTemplate):
     """
     Tasks to evaluate on using lm_eval_harness
     """
+
+    return_logits: bool = False
+    """
+    Include logits in the output (WARNING: this is slow and a lot of data)
+    """
