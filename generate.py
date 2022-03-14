@@ -16,6 +16,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+import tempfile
 from megatron.utils import print_rank_0, setup_for_inference_or_eval
 
 from megatron.text_generation_utils import generate_samples_input_from_file, generate_samples_from_prompt, generate_samples_unconditional, generate_samples_interactive
@@ -52,7 +54,8 @@ def main():
             recompute = neox_args.recompute, 
             temperature = neox_args.temperature,
             top_k = neox_args.top_k, 
-            top_p = neox_args.top_p
+            top_p = neox_args.top_p,
+            num_samples = neox_args.num_samples,
         )
 
     elif neox_args.text_gen_type == 'interactive':
@@ -65,7 +68,27 @@ def main():
             top_k = neox_args.top_k, 
             top_p = neox_args.top_p
         )
-
+    elif neox_args.text_gen_type == 'batch':
+        assert neox_args.batch_input_file is not None
+        jsbatch = json.load(open(neox_args.batch_input_file))
+        mandatory_keys = ['prompt', 'output_file']
+        for obj in jsbatch:
+            assert all(k in obj for k in mandatory_keys)
+            tf = tempfile.NamedTemporaryFile(mode='w+', delete=False)
+            tf.write(obj['prompt'])
+            tf.close()
+            generate_samples_input_from_file(
+                neox_args=neox_args,
+                model=model,
+                input_file=tf.name,
+                output_file=obj['output_file'],
+                maximum_tokens = obj.get('max_tokens', neox_args.maximum_tokens),
+                recompute = obj.get('recompute', neox_args.recompute),
+                temperature = obj.get('temperature', neox_args.temperature),
+                top_k = obj.get('top_k', neox_args.top_k),
+                top_p = obj.get('top_p', neox_args.top_p),
+                num_samples = obj.get('num_samples', neox_args.num_samples),
+            )
     else:
         raise ValueError(f"`text-gen-type` either not specified or not recognised: {neox_args.text_gen_type}")
 

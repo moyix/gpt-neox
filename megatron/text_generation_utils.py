@@ -549,6 +549,7 @@ def generate_samples_input_from_file(
     temperature: float = 0.0,
     top_k: int = 0,
     top_p: float = 0.0,
+    num_samples: int = 1,
 ):
     """
     Generates samples from an input file and writes them to an output file.
@@ -586,8 +587,8 @@ def generate_samples_input_from_file(
         "generate_samples_input_from_file() loading input from {}".format(input_file)
     )
     with open(input_file, "r") as f:
-        prompts = f.readlines()
-    prompts = [p.strip() for p in prompts]
+        prompts = (f.read(),)  # NOTE: replaced with a whole-file read for code generation.
+    prompts = [prompts[0] for _ in range(num_samples)]
     prompts = [p for p in prompts if len(p) > 0]
     print_rank_0(
         "generate_samples_input_from_file() prompts loaded: {}".format(len(prompts))
@@ -729,7 +730,7 @@ def generate_samples_interactive(
 
         if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
             os.system("clear")
-            raw_text = input("Context prompt >>> ")
+            raw_text = input("Context prompt >>> ").replace('\\n', '\n').replace('\\t', '\t')
             context_tokens = neox_args.tokenizer.tokenize(raw_text)
             if len(context_tokens) == 0:
                 context_tokens = [neox_args.tokenizer.eod]

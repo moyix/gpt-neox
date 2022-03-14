@@ -1,0 +1,18 @@
+# Parameters used for text generation
+# Make sure `load` is specified somewhere else
+{
+  # Text gen type: `input-file`, `unconditional` or `interactive`
+  "text-gen-type": "batch",
+ 
+  # Params for all
+  "maximum_tokens": 128,
+  "temperature": 0.5,
+  "top_p": 0.0,
+  "top_k": 0,
+  "recompute": false,
+  
+  # `unconditional`: samples
+  "num-samples": 5,
+
+  "batch-input-file": "batch.json",
+}

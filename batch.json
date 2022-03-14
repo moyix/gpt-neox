@@ -1,0 +1,1 @@
+[{"prompt": "#include <stdio.h>\n#include <stdlib.h>\n\n// Compute the nth Fibonacci number\nint fib(int n) {", "output_file": "fib_c.jsonl"}, {"prompt": "# Compute the nth Fibonacci number\n\ndef fib(n):", "output_file": "fib_py.jsonl"}]

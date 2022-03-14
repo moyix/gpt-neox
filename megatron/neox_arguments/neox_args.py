@@ -909,7 +909,7 @@ class NeoXArgsTextgen(NeoXArgsTemplate):
     text_gen_type: str = None
     """
     How to generate text/sample the model.
-    Options: `unconditional`, `input-file`, `interactive`
+    Options: `unconditional`, `input-file`, `interactive`, `batch`
     """
 
     temperature: float = 0.0
@@ -962,5 +962,10 @@ class NeoXArgsTextgen(NeoXArgsTemplate):
     """
     Tasks to evaluate on using lm_eval_harness
     """
-
     
+    batch_input_file: str = ""
+    """
+    JSON file to use with text_gen_type = 'batch'
+    The JSON can have a list of objects with keys: prompt, recompute, max_tokens, temperature, top_p, top_k, num_samples, and output_file.
+    Only "prompt" and "output_file" are mandatory; if a key is not present the corresponding NeoXArgsTextgen argument will be used.
+    """
