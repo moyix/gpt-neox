@@ -579,11 +579,11 @@ class NeoXArgs(*BASE_CLASSES):
             grad_acc > 0
         ), f"Gradient accumulation steps: {grad_acc} has to be greater than 0"
 
-        assert train_batch == micro_batch * grad_acc * dp_world_size, (
-            f"Check batch related parameters. train_batch_size is not equal"
-            " to micro_batch_per_gpu * gradient_acc_step * world_size \n"
-            f"{train_batch} != {micro_batch} * {grad_acc} * {dp_world_size}"
-        )
+        #assert train_batch == micro_batch * grad_acc * dp_world_size, (
+        #    f"Check batch related parameters. train_batch_size is not equal"
+        #    " to micro_batch_per_gpu * gradient_acc_step * world_size \n"
+        #    f"{train_batch} != {micro_batch} * {grad_acc} * {dp_world_size}"
+        #)
 
     def calculate_derived(self):
         """
