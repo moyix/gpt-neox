@@ -529,12 +529,16 @@ def generate_samples_from_prompt(
         )
         batch_is_done = is_done.cpu().tolist()
         if neox_args.return_logits:
-            confidence_scores = batch_logprobs.mean(axis=1).cpu().tolist()
+            confidence_scores = [
+                batch_logprobs[i][batch_token_generation_start_index[i]:].mean().cpu().item()
+                for i in range(len(batch_context_tokens))
+            ]
             batch_logprobs = batch_logprobs.cpu().tolist()
         else:
             # Dummy list so zip() works below
             batch_logprobs = [None]*len(batch_context_tokens)
             confidence_scores = [0.0]*len(batch_context_tokens)
+
         for tokens, logprobs, conf, start_index, end_index, is_done in zip(
             batch_context_tokens,
             batch_logprobs,
