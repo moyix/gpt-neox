@@ -29,6 +29,7 @@ from megatron import print_rank_0
 from megatron import mpu
 from megatron.utils import get_ltor_masks_and_position_ids, is_mp_rank_0
 
+import gzip
 
 def get_batch(neox_args, context_tokens: torch.Tensor):
     """
@@ -239,7 +240,7 @@ def stream_tokens(
         stop_tokens = torch.cuda.LongTensor(stop_tokens)
         if stop_tokens.ndim == 1:
             stop_tokens = stop_tokens.unsqueeze(0)
-
+    
     # Make sure context tokens + start tokens are the same across all ranks
     token_generation_start_index = torch.cuda.LongTensor(context_lengths)
     torch.distributed.broadcast(
@@ -272,6 +273,15 @@ def stream_tokens(
         - 1,  # never generate more than the model's sequence length
         token_index_to_generate + maximum_tokens - 1,
     )
+
+    # A little silly but if we want logits for the last generated token,
+    # we need to generate one more token than we need
+    if neox_args.return_logits:
+        last_token_index_to_generate += 1
+
+    # Space to hold the logits [bs, seq, vocab_size]
+    if neox_args.return_logits:
+        all_logits = torch.zeros((batch_size, neox_args.seq_length, neox_args.padded_vocab_size)).cuda()
 
     with torch.no_grad():
         # initialize generation variables
@@ -313,6 +323,18 @@ def stream_tokens(
                     generated_token_logits = (
                         logits[:, -1].view(batch_size, -1).contiguous()
                     )  # [bs, seq, vocab_size] -> [bs, vocab_size]
+
+            if neox_args.return_logits:
+                # add the generated logits to the logprob batch; if it's the first token,
+                # we need to add the context logits
+                if token_index_to_generate == first_token_index_to_generate:
+                    # print(f"[DEBUG] first index({token_index_to_generate}): copying logits to all_logits "
+                    #       f"into indices 0-{token_index_to_generate-1}")
+                    all_logits[:, :token_index_to_generate, :] = logits[:, :token_index_to_generate, :]
+                else:
+                    # print("[DEBUG] writing generated_token_logits (" + str(generated_token_logits.size()) +
+                    #     ") to all_logits (" + str(all_logits.size()) + ") at [:," + str(token_index_to_generate-1) + ",:]")
+                    all_logits[:, token_index_to_generate - 1, :] = generated_token_logits
 
             if logits is not None:
                 # sample token id of the to be generated token
@@ -377,10 +399,15 @@ def stream_tokens(
 
             token_index_to_generate += 1
 
-            yield context_tokens, token_generation_start_index, token_generation_end_index, state_is_done.bool()
+            if neox_args.return_logits:
+                yield (context_tokens, token_generation_start_index, token_generation_end_index,
+                    all_logits, state_is_done.bool())
+            else:
+                yield (context_tokens, token_generation_start_index, token_generation_end_index,
+                    None, state_is_done.bool())
+
             if torch.all(state_is_done):
                 break
-
 
 def generate_samples_from_prompt(
     neox_args,
@@ -472,6 +499,7 @@ def generate_samples_from_prompt(
             batch_context_tokens,
             batch_token_generation_start_index,
             batch_token_generation_end_index,
+            batch_logits,
             is_done,
         ) in stream_tokens(
             neox_args=neox_args,
@@ -491,13 +519,24 @@ def generate_samples_from_prompt(
         batch_token_generation_start_index = (
             batch_token_generation_start_index.cpu().numpy().tolist()
         )
+        # And since we generated one more than than we needed, subtract one
+        if neox_args.return_logits:
+            batch_token_generation_end_index -= 1
         batch_token_generation_end_index = (
             batch_token_generation_end_index.cpu().numpy().tolist()
         )
         batch_is_done = is_done.cpu().numpy().tolist()
+        if neox_args.return_logits:
+            # Trim batch_logits to remove pad tokens from the vocab
+            batch_logits = batch_logits[:, :, :neox_args.tokenizer.vocab_size]
+            batch_logits = batch_logits.cpu().numpy().tolist()
+        else:
+            # Dummy list so zip() works below
+            batch_logits = [None]*len(batch_context_tokens)
 
-        for tokens, start_index, end_index, is_done in zip(
+        for tokens, logits, start_index, end_index, is_done in zip(
             batch_context_tokens,
+            batch_logits,
             batch_token_generation_start_index,
             batch_token_generation_end_index,
             batch_is_done,
@@ -505,6 +544,8 @@ def generate_samples_from_prompt(
 
             if end_index >= start_index:
                 generated_tokens = tokens[start_index : end_index + 1]
+                if neox_args.return_logits:
+                    logits = logits[0 : end_index + 1]
                 try:
                     generated_text = neox_args.tokenizer.detokenize(generated_tokens)
                     message = None
@@ -514,6 +555,7 @@ def generate_samples_from_prompt(
             else:
                 generated_text = None
                 generated_tokens = []
+                logits = []
                 # this will happen if the first generated token is a stop token or eos token
                 message = "WARNING: text generation did not start; try different batching or adjust parameters"
             if is_mp_rank_0():
@@ -523,6 +565,9 @@ def generate_samples_from_prompt(
                     "length": len(generated_tokens),
                     "finished": is_done,
                     "message": message,
+		            "context_tokens": context_tokens,
+		            "generated_tokens": generated_tokens,
+                    "logits": logits,
                     "duration_seconds": float(time.time() - start_time),
                 }
                 generated_texts.append(data)
@@ -580,6 +625,10 @@ def generate_samples_input_from_file(
     with open(input_file, "r") as f:
         prompts = f.readlines()
     prompts = [p.strip() for p in prompts]
+    # Unescape the prompts
+    def unescape(s):
+        return s.encode('latin-1', 'backslashreplace').decode('unicode-escape')
+    prompts = [unescape(p) for p in prompts]
     prompts = [p for p in prompts if len(p) > 0]
     print_rank_0(
         "generate_samples_input_from_file() prompts loaded: {}".format(len(prompts))
@@ -608,12 +657,11 @@ def generate_samples_input_from_file(
     )
 
     if is_mp_rank_0():
-        with open(output_file, "w") as f_out:
+        with gzip.open(output_file, "w") as f_out:
             for item in generated_texts:
-                f_out.write(json.dumps(item) + "\n")
+                f_out.write((json.dumps(item) + "\n").encode())
     print_rank_0("generate_samples_input_from_file() done")
     return generated_texts
-
 
 def generate_samples_unconditional(
     neox_args,
@@ -746,6 +794,7 @@ def generate_samples_interactive(
             batch_context_tokens,
             batch_token_generation_start_index,
             batch_token_generation_end_index,
+            batch_token_log_probs,
             is_done,
         ) in stream_tokens(
             neox_args=neox_args,
