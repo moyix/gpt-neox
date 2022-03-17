@@ -273,11 +273,12 @@ def stream_tokens(
     )
 
     # A little silly but if we want logits for the last generated token,
-    # we need to generate one more token than we need
-    if neox_args.return_logits:
+    # we need to generate one more token than we need. But don't overflow.
+    if neox_args.return_logits and \
+        last_token_index_to_generate < neox_args.seq_length - 1:
         last_token_index_to_generate += 1
 
-    # Space to hold the logits [bs, seq, vocab_size]
+    # Space to hold the logits [bs, seq]
     if neox_args.return_logits:
         all_logits = torch.zeros((batch_size, last_token_index_to_generate+1)).cuda()
 
@@ -519,8 +520,9 @@ def generate_samples_from_prompt(
         batch_token_generation_start_index = (
             batch_token_generation_start_index.cpu().tolist()
         )
-        # And since we generated one more than than we needed, subtract one
-        if neox_args.return_logits:
+        # And since we may have generated one more than than we needed, subtract one
+        if neox_args.return_logits and \
+            batch_token_generation_end_index != neox_args.seq_length - 1:
             batch_token_generation_end_index -= 1
         batch_token_generation_end_index = (
             batch_token_generation_end_index.cpu().tolist()
