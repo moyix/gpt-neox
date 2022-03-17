@@ -977,5 +977,5 @@ class NeoXArgsTextgen(NeoXArgsTemplate):
 
     return_logits: bool = False
     """
-    Include logits in the output (WARNING: this is slow and a lot of data)
+    Include logits (actually normalized log-probabilities) in the output
     """
