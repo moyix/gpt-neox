@@ -271,16 +271,11 @@ def stream_tokens(
         - 1,  # never generate more than the model's sequence length
         token_index_to_generate + maximum_tokens - 1,
     )
+    max_generated_tokens = last_token_index_to_generate - first_token_index_to_generate + 1
 
-    # A little silly but if we want logits for the last generated token,
-    # we need to generate one more token than we need. But don't overflow.
-    if neox_args.return_logits and \
-        last_token_index_to_generate < neox_args.seq_length - 1:
-        last_token_index_to_generate += 1
-
-    # Space to hold the logits [bs, seq]
+    # Space to hold the logits [bs, maxtoks]
     if neox_args.return_logits:
-        all_logits = torch.zeros((batch_size, last_token_index_to_generate+1)).cuda()
+        all_logits = torch.zeros((batch_size, max_generated_tokens)).cuda()
 
     with torch.no_grad():
         # initialize generation variables
@@ -341,19 +336,13 @@ def stream_tokens(
                         next_token_log_probs, num_samples=1
                     ).view(-1)
 
-            if neox_args.return_logits:
-                # add the logit for the generated token; if it's the first token,
-                # we need to add the context logits
-                if token_index_to_generate == first_token_index_to_generate:
-                    chosen_logits = logits.gather(2,
-                        context_tokens[:, :token_index_to_generate].unsqueeze(-1)).squeeze(-1)
-                    chosen_logits -= logits.logsumexp(2) # Normalize
-                    all_logits[:, :token_index_to_generate] = chosen_logits
-                else:
-                    cur_logits = logits[:, -1].view(batch_size, -1).contiguous()
-                    chosen_logits = cur_logits.gather(1, generated_tokens.unsqueeze(-1)).squeeze(-1)
-                    chosen_logits -= cur_logits.logsumexp(1) # Normalize
-                    all_logits[:, token_index_to_generate-1] = chosen_logits
+            if neox_args.return_logits and \
+                token_index_to_generate >= first_token_index_to_generate:
+                cur_logits = logits[:, -1].view(batch_size, -1).contiguous()
+                chosen_logits = cur_logits.gather(1, generated_tokens.unsqueeze(-1)).squeeze(-1)
+                chosen_logits -= cur_logits.logsumexp(1) # Normalize
+                idx = token_index_to_generate - first_token_index_to_generate
+                all_logits[:, idx] = chosen_logits
 
             if neox_args.is_pipe_parallel:
                 # broadcast generated tokens to pipe parallel group
@@ -520,38 +509,30 @@ def generate_samples_from_prompt(
         batch_token_generation_start_index = (
             batch_token_generation_start_index.cpu().tolist()
         )
-        # And since we may have generated one more than than we needed, subtract one
-        if neox_args.return_logits and \
-            batch_token_generation_end_index != neox_args.seq_length - 1:
-            batch_token_generation_end_index -= 1
         batch_token_generation_end_index = (
             batch_token_generation_end_index.cpu().tolist()
         )
         batch_is_done = is_done.cpu().tolist()
         if neox_args.return_logits:
-            confidence_scores = [
-                batch_logprobs[i][batch_token_generation_start_index[i]:].mean().cpu().item()
-                for i in range(len(batch_context_tokens))
-            ]
             batch_logprobs = batch_logprobs.cpu().tolist()
         else:
             # Dummy list so zip() works below
             batch_logprobs = [None]*len(batch_context_tokens)
-            confidence_scores = [0.0]*len(batch_context_tokens)
 
-        for tokens, logprobs, conf, start_index, end_index, is_done in zip(
+        for tokens, logprobs, start_index, end_index, is_done in zip(
             batch_context_tokens,
             batch_logprobs,
-            confidence_scores,
             batch_token_generation_start_index,
             batch_token_generation_end_index,
             batch_is_done,
         ):
 
             if end_index >= start_index:
-                generated_tokens = tokens[start_index : end_index + 1]
                 if neox_args.return_logits:
-                    logprobs = logprobs[0 : end_index + 1]
+                    gen_logit_start = start_index - len(tokens)
+                    gen_logit_end = end_index - len(tokens)
+                    logprobs = logprobs[gen_logit_start : gen_logit_end + 1]
+                    conf = sum(logprobs)/len(logprobs)
                 try:
                     generated_text = neox_args.tokenizer.detokenize(generated_tokens)
                     message = None
